@@ -10,22 +10,17 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astroquery.eso import Eso
 
-# ==============================================================================
-# BLOCK 1: USER INPUTS & INITIAL SETUP
-# ==============================================================================
 out_dir = Path("./stellar_data")
 out_dir.mkdir(exist_ok=True)
 
 csv_filename = out_dir / "stellar_rv_results.csv"
 
-# 1. Ask for absorption lines and wavelengths
 num_lines = int(input("How many absorption lines do you want to analyze? "))
 target_wavelengths = []
 for idx in range(num_lines):
     wl = float(input(f"  Enter rest wavelength for line {idx + 1} (Å): "))
     target_wavelengths.append(wl)
 
-# 2. Ask for star name
 star_name = input("\nEnter star name (e.g., Tau Ceti or HD 10700): ").strip()
 
 print(f"\n[INFO] Resolving coordinates for '{star_name}' via SIMBAD/NED...")
@@ -39,9 +34,6 @@ print(f"Target: {star_name}")
 print(f"  RA  (deg) : {target_coord.ra.deg:.6f}° ({target_coord.ra.to_string(unit=u.hour, sep=':')})")
 print(f"  Dec (deg) : {target_coord.dec.deg:.6f}° ({target_coord.dec.to_string(unit=u.degree, sep=':')})")
 
-# ==============================================================================
-# BLOCK 2: ESO ARCHIVE QUERY (FETCH ALL SPECTRA)
-# ==============================================================================
 search_radius = 5 * u.arcmin
 print(f"\n[INFO] Querying ESO Archive (HARPS) within {search_radius}...")
 
@@ -57,16 +49,12 @@ if table is None or len(table) == 0:
     print("[ERROR] No observations found within 5 arcminutes.")
     sys.exit(0)
 
-# Sort table by release/publication date in descending order
 if 'dp_pub_date' in table.colnames:
     table.sort('dp_pub_date', reverse=True)
 
 total_spectra = len(table)
 print(f"[INFO] Found {total_spectra} observation(s) to process.\n")
 
-# ==============================================================================
-# HELPER FUNCTIONS: GAUSSIAN MODEL & FWHM ESTIMATOR
-# ==============================================================================
 def gaussian(x, amplitude, center, sigma, baseline):
     """Gaussian Spectral Line Model"""
     return baseline + amplitude * np.exp(-((x - center) ** 2) / (2 * sigma ** 2))
@@ -109,10 +97,7 @@ def extract_time_of_capture(header):
             return key, header[key]
     return 'UNKNOWN', 'N/A'
 
-# ==============================================================================
-# BLOCK 3: AUTOMATED DOWNLOAD, PROCESSING, AND DATA COLLECTION
-# ==============================================================================
-c_kms = 299792.458  # Speed of light in km/s
+c_kms = 299792.458 
 all_records = []
 
 for spec_idx in range(total_spectra):
@@ -123,7 +108,6 @@ for spec_idx in range(total_spectra):
     print(f"[{spec_idx + 1}/{total_spectra}] Processing Dataset ID: {dp_id} (Date: {rel_date})")
     print("=" * 70)
 
-    # 1. Download FITS file if not present locally
     url = f"https://dataportal.eso.org/dataPortal/file/{dp_id}"
     fits_filename = out_dir / f"{dp_id.replace(':', '-')}.fits"
 
@@ -138,14 +122,12 @@ for spec_idx in range(total_spectra):
             print(f"[ERROR] Failed to download {dp_id}: {e}")
             continue
 
-    # 2. Extract Wavelength, Flux, and Time of Capture from Header
     try:
         with fits.open(fits_filename) as hdul:
             data_hdu = next(hdu for hdu in hdul if isinstance(hdu, fits.BinTableHDU))
             raw_wave = data_hdu.data["WAVE"]
             raw_flux = data_hdu.data["FLUX"]
             
-            # Read primary and extension headers for timestamp
             hdr = hdul[0].header
             hdr_ext = data_hdu.header
             
@@ -163,7 +145,6 @@ for spec_idx in range(total_spectra):
         print(f"[ERROR] Could not read FITS file {fits_filename}: {e}")
         continue
 
-    # Filter valid flux and wavelength values
     mask_valid = np.isfinite(wave) & np.isfinite(flux) & (flux > 0)
     wave = wave[mask_valid]
     flux = flux[mask_valid]
@@ -171,7 +152,6 @@ for spec_idx in range(total_spectra):
     spectrum_rvs = []
     spectrum_errs = []
 
-    # 3. Fit each requested line
     for lambda_rest in target_wavelengths:
         lower_wave = lambda_rest - 1.0
         upper_wave = lambda_rest + 1.0
@@ -183,13 +163,11 @@ for spec_idx in range(total_spectra):
             print(f"  [WARNING] Skipping line {lambda_rest:.2f} Å: region out of range or insufficient data.")
             continue
 
-        # Continuum Normalization
         core_mask = (sel_wave < np.percentile(sel_wave, 25)) | (sel_wave > np.percentile(sel_wave, 75))
         poly_coeff = np.polyfit(sel_wave[core_mask], sel_flux[core_mask], deg=1)
         continuum_fit = np.polyval(poly_coeff, sel_wave)
         norm_flux = sel_flux / continuum_fit
 
-        # Initial Guesses
         init_center = sel_wave[np.argmin(norm_flux)]
         init_amplitude = np.min(norm_flux) - 1.0
         init_baseline = 1.0
@@ -203,7 +181,6 @@ for spec_idx in range(total_spectra):
         p0 = [init_amplitude, init_center, init_sigma, init_baseline]
         bounds = ([-np.inf, sel_wave.min(), 1e-4, 0.5], [0.0, sel_wave.max(), np.inf, 1.5])
 
-        # Curve Fitting
         try:
             popt, pcov = curve_fit(gaussian, sel_wave, norm_flux, p0=p0, bounds=bounds)
             perr = np.sqrt(np.diag(pcov))
@@ -217,14 +194,12 @@ for spec_idx in range(total_spectra):
         fwhm = 2.35482 * abs(fit_sigma)
         fwhm_err = 2.35482 * err_sigma
 
-        # Radial Velocity Calculation
         rv_kms = c_kms * (fit_center - lambda_rest) / lambda_rest
         rv_err = c_kms * (err_center / lambda_rest)
 
         spectrum_rvs.append(rv_kms)
         spectrum_errs.append(rv_err)
 
-        # Append record for this specific line
         all_records.append({
             'dataset_id': dp_id,
             'star_name': star_name,
@@ -245,9 +220,6 @@ for spec_idx in range(total_spectra):
         std_rv = np.std(spectrum_rvs) if len(spectrum_rvs) > 1 else 0.0
         print(f"  --> Spectrum Mean RV: {mean_rv:+.2f} ± {std_rv:.2f} km/s")
 
-# ==============================================================================
-# BLOCK 4: WRITE TO CSV FILE
-# ==============================================================================
 csv_headers = [
     'dataset_id', 
     'star_name', 
