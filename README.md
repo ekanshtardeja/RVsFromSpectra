@@ -1,6 +1,6 @@
 # RVsFromSpectra
 
-**Stellar Motion** is a Python-based pipeline designed to automatically calculate radial velocities of stars from their observed spectra by analysing absorption-line shifts.
+This is a python pipeline which expects calculates RVs from stellar spectra
 
 
 
